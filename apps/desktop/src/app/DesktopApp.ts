@@ -244,6 +244,16 @@ const bootstrap = Effect.gen(function* () {
     }
     yield* primaryBackend.start;
     yield* logBootstrapInfo("bootstrap backend start requested");
+    // The endpoint and bootstrap credential are configured; bundled assets can load in parallel.
+    if (!(settings.wslOnly === true && settings.wslBackendEnabled === true)) {
+      yield* desktopWindow.ensureMain.pipe(
+        Effect.catch((error) =>
+          logBootstrapWarning("failed to open main window while the backend starts", {
+            error: error.message,
+          }),
+        ),
+      );
+    }
     yield* appActivation.start.pipe(
       Effect.tap(() => logBootstrapInfo("desktop app control socket ready")),
       Effect.catch((error) => logStartupError("desktop app control socket unavailable", { error })),

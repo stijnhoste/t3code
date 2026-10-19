@@ -221,6 +221,7 @@ function layerTest(input: {
   readonly createCount: Ref.Ref<number>;
   readonly mainWindow: Ref.Ref<Option.Option<Electron.BrowserWindow>>;
   readonly createdWindowOptions?: Electron.BrowserWindowConstructorOptions[];
+  readonly beforeCreate?: Effect.Effect<void>;
   readonly desktopSettings?: DesktopAppSettings.DesktopSettings;
   readonly mainWindowBoundsUpdates?: DesktopAppSettings.DesktopWindowBounds[];
   readonly mainWindowMaximizedUpdates?: boolean[];
@@ -271,11 +272,15 @@ function layerTest(input: {
 
   const layerElectronWindow = Layer.succeed(ElectronWindow.ElectronWindow, {
     create: (options) =>
-      Effect.sync(() => {
-        input.createdWindowOptions?.push(options);
-      }).pipe(
-        Effect.andThen(Ref.update(input.createCount, (count) => count + 1)),
-        Effect.as(input.window),
+      (input.beforeCreate ?? Effect.void).pipe(
+        Effect.andThen(
+          Effect.sync(() => {
+            input.createdWindowOptions?.push(options);
+          }).pipe(
+            Effect.andThen(Ref.update(input.createCount, (count) => count + 1)),
+            Effect.as(input.window),
+          ),
+        ),
       ),
     main: Ref.get(input.mainWindow),
     currentMainOrFirst: Ref.get(input.mainWindow),
@@ -630,6 +635,59 @@ describe("DesktopWindow", () => {
       }),
     );
   });
+
+  it.effect("creates one renderer when startup overlaps backend readiness", () =>
+    Effect.gen(function* () {
+      const fakeWindow = makeFakeBrowserWindow();
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const creating = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const beforeCreate = Deferred.succeed(creating, undefined).pipe(
+        Effect.andThen(Deferred.await(release)),
+        Effect.asVoid,
+      );
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        const early = yield* desktopWindow.ensureMain.pipe(Effect.forkChild);
+        yield* Deferred.await(creating);
+        const ready = yield* desktopWindow
+          .handleBackendReady(new URL("http://127.0.0.1:3773"))
+          .pipe(Effect.forkChild);
+        yield* Effect.yieldNow;
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(early);
+        yield* Fiber.join(ready);
+        assert.equal(yield* Ref.get(createCount), 1);
+        assert.equal(fakeWindow.loadURL.mock.calls.length, 1);
+      }).pipe(
+        Effect.provide(
+          layerTest({ window: fakeWindow.window, createCount, mainWindow, beforeCreate }),
+        ),
+      );
+    }),
+  );
+
+  it.effect("does not reopen an early window closed before backend readiness", () =>
+    Effect.gen(function* () {
+      const fakeWindow = makeFakeBrowserWindow();
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        yield* desktopWindow.ensureMain;
+        assert.deepEqual(fakeWindow.loadURL.mock.calls[0], ["t3code-dev://app/"]);
+        fakeWindow.windowListeners.get("closed")!();
+        yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
+        assert.equal(yield* Ref.get(createCount), 1);
+        assert.isTrue(Option.isNone(yield* Ref.get(mainWindow)));
+
+        yield* desktopWindow.activate;
+        assert.equal(yield* Ref.get(createCount), 2);
+        assert.isTrue(Option.isSome(yield* Ref.get(mainWindow)));
+      }).pipe(Effect.provide(layerTest({ window: fakeWindow.window, createCount, mainWindow })));
+    }),
+  );
 
   it.effect("does not open a development window until the backend is ready", () =>
     Effect.gen(function* () {

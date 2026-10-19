@@ -1,4 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -67,6 +68,7 @@ describe("DesktopLocalEnvironmentAuth", () => {
           {
             id: PRIMARY_LOCAL_ENVIRONMENT_ID,
             label: Effect.succeed("Windows"),
+            waitForReady: () => Effect.succeed(true),
             currentConfig: Effect.succeedSome(config),
           },
         ]),
@@ -120,6 +122,7 @@ describe("DesktopLocalEnvironmentAuth", () => {
             {
               id: PRIMARY_LOCAL_ENVIRONMENT_ID,
               label: Effect.succeed("Windows"),
+              waitForReady: () => Effect.succeed(true),
               currentConfig: Effect.succeedSome({
                 ...config,
                 bootstrap: { ...config.bootstrap, desktopBootstrapSecret: "desktop-secret" },
@@ -166,10 +169,47 @@ describe("DesktopLocalEnvironmentAuth", () => {
       {
         id: PRIMARY_LOCAL_ENVIRONMENT_ID,
         label: Effect.succeed("Windows"),
+        waitForReady: () => Effect.succeed(true),
         currentConfig: Effect.succeedSome(config),
       },
     ]),
   } as unknown as DesktopBackendPool.DesktopBackendPool["Service"]);
+  it.effect("waits for backend readiness before spending the bootstrap retry window", () =>
+    Effect.gen(function* () {
+      const ready = yield* Deferred.make<boolean>();
+      const requests = yield* Ref.make(0);
+      const pool = Layer.succeed(DesktopBackendPool.DesktopBackendPool, {
+        list: Effect.succeed([
+          {
+            id: PRIMARY_LOCAL_ENVIRONMENT_ID,
+            label: Effect.succeed("Local"),
+            currentConfig: Effect.succeedSome(config),
+            waitForReady: () => Deferred.await(ready),
+          },
+        ]),
+      } as unknown as DesktopBackendPool.DesktopBackendPool["Service"]);
+      const client = Layer.succeed(
+        HttpClient.HttpClient,
+        HttpClient.make((request) =>
+          Ref.update(requests, (count) => count + 1).pipe(Effect.as(tokenResponse(request))),
+        ),
+      );
+      const auth = yield* DesktopLocalEnvironmentAuth.DesktopLocalEnvironmentAuth.pipe(
+        Effect.provide(
+          DesktopLocalEnvironmentAuth.layer.pipe(Layer.provide(Layer.merge(pool, client))),
+        ),
+      );
+      const token = yield* auth.getBearerToken.pipe(Effect.forkChild);
+      yield* TestClock.adjust("40 seconds");
+      assert.strictEqual(yield* Ref.get(requests), 0);
+      assert.isUndefined(token.pollUnsafe());
+
+      yield* Deferred.succeed(ready, true);
+      assert.strictEqual(yield* Fiber.join(token), "desktop-bearer-token");
+      assert.strictEqual(yield* Ref.get(requests), 1);
+    }).pipe(Effect.provide(TestClock.layer())),
+  );
+
   const makeExchange = (failures: number, failure: () => Response) =>
     Effect.gen(function* () {
       const requestCount = yield* Ref.make(0);

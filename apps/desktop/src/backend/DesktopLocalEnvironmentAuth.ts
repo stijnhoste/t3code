@@ -18,6 +18,7 @@ import * as DesktopBackendPool from "./DesktopBackendPool.ts";
 
 const BOOTSTRAP_TRANSIENT_RETRY_TIMEOUT = Duration.seconds(15);
 const BOOTSTRAP_TRANSIENT_RETRY_INTERVAL = Duration.millis(500);
+const BACKEND_START_TIMEOUT = Duration.minutes(2);
 const TRANSIENT_BOOTSTRAP_STATUS_CODES = new Set([502, 503, 504]);
 
 const isTransientBearerBootstrapError = (error: RemoteEnvironmentRequestError): boolean => {
@@ -80,6 +81,12 @@ export const make = Effect.gen(function* () {
 
         const instances = yield* pool.list;
         const primary = instances.find((instance) => instance.id === PRIMARY_LOCAL_ENVIRONMENT_ID);
+        // Cold startup must not spend the HTTP retry budget before the server can accept auth.
+        if (primary !== undefined && !(yield* primary.waitForReady(BACKEND_START_TIMEOUT))) {
+          return yield* new DesktopLocalEnvironmentAuthSessionBootstrapError({
+            cause: new Error("Local backend did not become ready."),
+          });
+        }
         const configOption = primary === undefined ? Option.none() : yield* primary.currentConfig;
         if (Option.isNone(configOption)) {
           return yield* new DesktopLocalEnvironmentAuthBackendNotConfiguredError();

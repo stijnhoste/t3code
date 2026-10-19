@@ -5,6 +5,7 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
+import * as Semaphore from "effect/Semaphore";
 
 import * as Electron from "electron";
 
@@ -299,6 +300,9 @@ export const make = Effect.gen(function* () {
   const electronApp = yield* ElectronApp.ElectronApp;
   const rendererHistory = yield* DesktopRendererHistory.DesktopRendererHistory;
   const backendReadyRef = yield* Ref.make(false);
+  const mainWindowCreation = yield* Semaphore.make(1);
+  // A readiness callback must not undo a close while the server was starting.
+  let mainClosed = false;
   const splashWindowRef = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
   const context = yield* Effect.context<DesktopWindowRuntimeServices>();
   const runFork = Effect.runForkWith(context);
@@ -832,6 +836,7 @@ export const make = Effect.gen(function* () {
     window.on("closed", () => {
       clearDevelopmentLoadRetry();
       clearBoundsPersist();
+      mainClosed = true;
       void runPromise(electronWindow.clearMain(Option.some(window)));
     });
 
@@ -845,13 +850,18 @@ export const make = Effect.gen(function* () {
     return window;
   }).pipe(Effect.withSpan("desktop.window.createMain"));
 
-  const ensureMain = Effect.gen(function* () {
+  const ensureMainUnlocked = Effect.gen(function* () {
     const existingWindow = yield* currentMainWindow;
     if (Option.isSome(existingWindow)) {
       return existingWindow.value;
     }
+    mainClosed = false;
     return yield* createMain;
-  }).pipe(Effect.withSpan("desktop.window.ensureMain"));
+  });
+  const ensureMain = ensureMainUnlocked.pipe(
+    mainWindowCreation.withPermit,
+    Effect.withSpan("desktop.window.ensureMain"),
+  );
 
   const revealOrCreateMain = Effect.gen(function* () {
     const window = yield* ensureMain;
@@ -865,11 +875,12 @@ export const make = Effect.gen(function* () {
   });
 
   const createMainIfBackendReady = Effect.gen(function* () {
-    if (yield* waitingForBackend) return;
-    const existingWindow = yield* currentMainWindow;
-    if (Option.isSome(existingWindow)) return;
-    yield* createMain;
-  }).pipe(Effect.withSpan("desktop.window.createMainIfBackendReady"));
+    if ((yield* waitingForBackend) || mainClosed) return;
+    yield* ensureMainUnlocked;
+  }).pipe(
+    mainWindowCreation.withPermit,
+    Effect.withSpan("desktop.window.createMainIfBackendReady"),
+  );
 
   const showConnectingSplash = Effect.gen(function* () {
     const existingSplash = yield* Ref.get(splashWindowRef);
@@ -956,6 +967,7 @@ export const make = Effect.gen(function* () {
         yield* electronWindow.reveal(existingWindow.value);
         return;
       }
+      mainClosed = false;
       const backendReady = yield* Ref.get(backendReadyRef);
       if (!backendReady) {
         const splash = yield* Ref.get(splashWindowRef);
