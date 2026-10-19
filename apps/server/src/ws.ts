@@ -41,6 +41,7 @@ import {
   type FileManagerRevealKind,
   type OrchestrationClientOrigin,
   type OrchestrationV2Command,
+  type OrchestrationV2SubscribeThreadInput,
   type GitActionProgressEvent,
   type GitManagerServiceError,
   type MessageId,
@@ -736,13 +737,7 @@ const enrichProjectShells = Effect.fn("ws.orchestrationV2.enrichProjectShells")(
 );
 
 export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subscribeThread")(
-  function* (input: {
-    readonly threadId: ThreadId;
-    readonly afterSequence?: number;
-    readonly requestCompletionMarker?: boolean;
-    readonly acceptBoundedSnapshot?: boolean;
-    readonly acceptCompactTurnItems?: boolean;
-  }) {
+  function* (input: OrchestrationV2SubscribeThreadInput) {
     const threadManagement = yield* ThreadManagementService.ThreadManagementService;
     const applicationEvents = yield* OrchestrationEventStore.OrchestrationEventStore;
 
