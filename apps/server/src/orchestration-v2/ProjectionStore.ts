@@ -3598,7 +3598,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               WHERE failure.type = 'error' AND failure.status = 'failed'
                 AND json_extract(failure.payload_json, '$.failure.class') = 'usage_limit'
             )
-            AND t.archived_at IS NULL
+            AND json_extract(t.payload_json, '$.archivedAt') IS NULL
             AND json_extract(t.payload_json, '$.settledOverride') IS NOT 'settled'
             AND json_extract(item.payload_json, '$.failure.class') = 'usage_limit'
             AND json_extract(item.payload_json, '$.failure.resetAt') IS NOT NULL
@@ -5744,7 +5744,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         SELECT thread_id, json_extract(payload_json, '$.worktreePath') AS worktree_path
         FROM orchestration_v2_projection_threads
         WHERE deleted_at IS NULL
-          AND archived_at IS NULL
+          AND json_extract(payload_json, '$.archivedAt') IS NULL
           AND json_extract(payload_json, '$.worktreePath') IS NOT NULL
       `.pipe(
         Effect.map((rows) =>
