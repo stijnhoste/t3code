@@ -19,12 +19,11 @@ export interface CodexEffectiveRuntime {
   readonly revision: string;
 }
 const decodeSettings = Schema.decodeSync(CodexSettings);
-const managedCodexLaunchArgs = (profileKey: string, command: string, args: ReadonlyArray<string>) =>
+const managedCodexLaunchArgs = (command: string, args: ReadonlyArray<string>) =>
   [
-    `model_provider="openai_token_sharing_${profileKey}"`,
-    // Codex recursively merges -c tables. A profile-specific key avoids inheriting
-    // auth fields or headers from a shared openai_token_sharing provider.
-    `model_providers.openai_token_sharing_${profileKey}={name="OpenAI Token Sharing",base_url="https://api.openai.com/v1",model_catalog_url="https://api.openai.com/v1/models",wire_api="responses",requires_openai_auth=false,supports_websockets=false,auth={command=${JSON.stringify(command)},args=${JSON.stringify(args)},timeout_ms=${COMMAND_TIMEOUT_MS},refresh_interval_ms=0}}`,
+    'model_provider="openai_token_sharing"',
+    // Codex persists this provider ID in rollouts and needs it unchanged to resume.
+    `model_providers.openai_token_sharing={name="OpenAI Token Sharing",base_url="https://api.openai.com/v1",model_catalog_url="https://api.openai.com/v1/models",wire_api="responses",requires_openai_auth=false,supports_websockets=false,auth={command=${JSON.stringify(command)},args=${JSON.stringify(args)},timeout_ms=${COMMAND_TIMEOUT_MS},refresh_interval_ms=0}}`,
     "features.api_key_model_discovery=true",
     "features.multi_agent=false",
     "features.multi_agent_v2=false",
@@ -129,7 +128,7 @@ export const makeCodexManagedRuntime = Effect.fn("makeCodexManagedRuntime")(func
         setupMode: "managed",
         binaryPath: executable.executablePath,
         homePath,
-        launchArgs: managedCodexLaunchArgs(profileKey, invocation.command, authArgs),
+        launchArgs: managedCodexLaunchArgs(invocation.command, authArgs),
       }),
       environment,
       revision: profileKey,
