@@ -1,3 +1,4 @@
+import * as Schema from "effect/Schema";
 import {
   scheduledTaskLegacyUpsert,
   EnvironmentId,
@@ -6,6 +7,7 @@ import {
   type ServerConfig,
   ProviderInstanceId,
   ScheduledTaskId,
+  ScheduledTaskUpsertInput,
   ThreadId,
   type ScheduledTask,
 } from "@t3tools/contracts";
@@ -325,39 +327,55 @@ const buildEdit = (
   live: ScheduledTask,
 ) => buildScheduledTaskUpdateInput(draft, baseline, live, legacyTask.modelSelection);
 
+const encodeUpsertInput = Schema.encodeSync(ScheduledTaskUpsertInput);
+const decodeUpsertInput = Schema.decodeUnknownSync(ScheduledTaskUpsertInput);
+
 describe("scheduled task partial edits", () => {
-  it("a stale rename preserves the live prompt, pause, project and binding", () => {
-    const opened = taskToDraft(legacyTask);
-    const live: ScheduledTask = {
-      ...legacyTask,
-      prompt: "Changed elsewhere",
-      enabled: false,
-      projectId: ProjectId.make("moved"),
-      threadId: ThreadId.make("rebound"),
-    };
-    expect(buildEdit(opened, opened, live)).toBeNull();
-    expect(buildEdit({ ...opened, title: "Renamed" }, opened, live)).toEqual({
-      id: live.id,
-      projectId: live.projectId,
-      title: "Renamed",
-    });
-    const patch = buildEdit({ ...opened, title: "Renamed" }, opened, live)!;
-    expect(scheduledTaskLegacyUpsert(live, patch)).toEqual({
-      id: live.id,
-      requireExisting: true,
-      title: "Renamed",
-      prompt: live.prompt,
-      enabled: live.enabled,
-      schedule: live.schedule,
-      projectId: live.projectId,
-      threadId: live.threadId,
-      workspaceStrategy: live.workspaceStrategy,
-      modelSelection: live.modelSelection,
-      runtimeMode: live.runtimeMode,
-      interactionMode: live.interactionMode,
-      creationSource: live.creationSource,
-    });
-  });
+  it.each([30_000, 120_000])(
+    "a stale rename preserves live fields and normalizes only a live sub-minute interval (%i ms)",
+    (everyMs) => {
+      const opened = taskToDraft({
+        ...legacyTask,
+        schedule: { type: "interval", everyMs: 30_000 },
+      });
+      expect(opened.intervalMinutes).toBe("1");
+      const live: ScheduledTask = {
+        ...legacyTask,
+        schedule: { type: "interval", everyMs },
+        prompt: "Changed elsewhere",
+        enabled: false,
+        projectId: ProjectId.make("moved"),
+        threadId: ThreadId.make("rebound"),
+      };
+      const schedule =
+        everyMs < 60_000 ? { type: "interval" as const, everyMs: 60_000 } : undefined;
+      const patch = buildEdit({ ...opened, title: "Renamed" }, opened, live)!;
+      const fallback = scheduledTaskLegacyUpsert(live, patch);
+      expect(decodeUpsertInput(encodeUpsertInput(fallback))).toEqual(fallback);
+      if (schedule === undefined) expect(buildEdit(opened, opened, live)).toBeNull();
+      expect(patch).toEqual({
+        id: live.id,
+        projectId: live.projectId,
+        title: "Renamed",
+        ...(schedule ? { schedule } : {}),
+      });
+      expect(fallback).toEqual({
+        id: live.id,
+        requireExisting: true,
+        title: "Renamed",
+        prompt: live.prompt,
+        enabled: live.enabled,
+        schedule: schedule ?? live.schedule,
+        projectId: live.projectId,
+        threadId: live.threadId,
+        workspaceStrategy: live.workspaceStrategy,
+        modelSelection: live.modelSelection,
+        runtimeMode: live.runtimeMode,
+        interactionMode: live.interactionMode,
+        creationSource: live.creationSource,
+      });
+    },
+  );
 
   it("a base-ref edit sends no untouched workspace controls or hidden branch", () => {
     const task: ScheduledTask = {
