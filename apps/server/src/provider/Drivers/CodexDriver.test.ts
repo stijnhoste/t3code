@@ -149,7 +149,7 @@ it.layer(layerTest)("CodexDriver", (it) => {
           earliestRefreshAt: null,
           scopes: ["chatgpt.tokens.use.direct"],
         });
-        const replaceAccount = store.set(new TextEncoder().encode(replacement));
+        const replaceAccount = store.set(new TextEncoder().encode(replacement)).pipe(Effect.orDie);
         const executable = {
           executablePath: "/user/bin/codex",
           managedVersionDirectory: null,
