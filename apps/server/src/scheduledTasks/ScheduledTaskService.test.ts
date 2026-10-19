@@ -521,3 +521,94 @@ it.effect("guarded mutations reject changed bindings and current or new bound-th
     assert.deepEqual((yield* service.list()).tasks, [unbound]);
   }).pipe(Effect.provide(atomicLayer)),
 );
+
+it.effect("manual reservation rejects a project move after the initial load", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* insertRow(
+      sql,
+      { id: atomicTaskId, next: "2026-09-09T12:01:00.000Z", enabled: 1, status: "never" },
+      "2026-09-09T12:00:00.000Z",
+    );
+    let moveBeforeReservation = false;
+    const serviceSql = new Proxy(sql, {
+      get(target, key) {
+        if (key !== "withTransaction") return Reflect.get(target, key);
+        return <A, E, R>(body: Effect.Effect<A, E, R>) =>
+          Effect.suspend(() => {
+            if (!moveBeforeReservation) return target.withTransaction(body);
+            moveBeforeReservation = false;
+            return sql`UPDATE scheduled_tasks SET project_id = 'project:destination' WHERE task_id = ${atomicTaskId}`.pipe(
+              Effect.andThen(target.withTransaction(body)),
+            );
+          });
+      },
+    });
+    const context = yield* Layer.build(
+      ScheduledTaskService.layer.pipe(
+        Layer.provide(atomicDependencies),
+        Layer.provide(Layer.succeed(SqlClient.SqlClient, serviceSql)),
+      ),
+    );
+    const service = yield* ScheduledTaskService.ScheduledTaskService.pipe(
+      Effect.provideContext(context),
+    );
+    moveBeforeReservation = true;
+    assert.isTrue(isScheduledTaskError(yield* service.runNow(atomicScope).pipe(Effect.flip)));
+    const task = (yield* service.list()).tasks[0]!;
+    assert.equal(task.projectId, "project:destination");
+    assert.equal(task.lastRunStatus, "never");
+    assert.equal(task.runCount, 0);
+  }).pipe(Effect.scoped, Effect.provide(SqlitePersistence.layerMemory)),
+);
+
+it.effect("completion preserves a pause committed before its transaction", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* insertRow(
+      sql,
+      { id: atomicTaskId, next: "2026-09-09T12:01:00.000Z", enabled: 1, status: "never" },
+      "2026-09-09T12:00:00.000Z",
+    );
+    let pauseBeforeCompletion = false;
+    const serviceSql = new Proxy(sql, {
+      get(target, key) {
+        if (key !== "withTransaction") return Reflect.get(target, key);
+        return <A, E, R>(body: Effect.Effect<A, E, R>) =>
+          Effect.suspend(() => {
+            if (!pauseBeforeCompletion) return target.withTransaction(body);
+            pauseBeforeCompletion = false;
+            return sql`UPDATE scheduled_tasks SET enabled = 0, next_run_at = NULL WHERE task_id = ${atomicTaskId}`.pipe(
+              Effect.andThen(target.withTransaction(body)),
+            );
+          });
+      },
+    });
+    const context = yield* Layer.build(
+      ScheduledTaskService.layer.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            atomicDependencies,
+            Layer.mock(ThreadLaunchService.ThreadLaunchService)({
+              launch: () =>
+                Effect.sync(() => {
+                  pauseBeforeCompletion = true;
+                }).pipe(Effect.andThen(Effect.die("test launch failure"))),
+            }),
+          ),
+        ),
+        Layer.provide(Layer.succeed(SqlClient.SqlClient, serviceSql)),
+      ),
+    );
+    const service = yield* ScheduledTaskService.ScheduledTaskService.pipe(
+      Effect.provideContext(context),
+    );
+    const result = yield* service.runNow(atomicScope);
+    const task = (yield* service.list()).tasks[0]!;
+    assert.equal(task.enabled, false);
+    assert.isNull(task.nextRunAt);
+    assert.equal(task.lastRunStatus, "failed");
+    assert.equal(task.runCount, 1);
+    assert.deepEqual(result.task, task);
+  }).pipe(Effect.scoped, Effect.provide(SqlitePersistence.layerMemory)),
+);
