@@ -1,5 +1,7 @@
 import {
   EnvironmentId,
+  type ScheduledTaskUpdateInput,
+  type OrchestrationV2ThreadLaunchWorkspaceStrategy,
   type ProjectId,
   ScheduledTaskId,
   type ScheduledTask,
@@ -196,4 +198,67 @@ export function scheduledTaskDefaultModel(
   );
   const fallback = models.find(({ model }) => model.isDefault) ?? models[0];
   return fallback ? { instanceId: fallback.instanceId, model: fallback.model.slug } : null;
+}
+
+export function workspaceStrategyFromDraft(
+  draft: DraftState,
+): OrchestrationV2ThreadLaunchWorkspaceStrategy {
+  if (draft.workspaceMode === "root") return { type: "root" };
+  if (draft.workspaceMode === "existing_worktree") {
+    return { type: "existing_worktree", worktreePath: draft.existingWorktreePath.trim() };
+  }
+  return {
+    type: "worktree",
+    baseRef: draft.baseRef.trim() || "main",
+    startFromOrigin: draft.startFromOrigin,
+  };
+}
+
+export function buildScheduledTaskUpdateInput(
+  draft: DraftState,
+  baseline: DraftState,
+  task: ScheduledTask,
+  modelSelection: ModelSelection,
+): ScheduledTaskUpdateInput | null {
+  const patch: { -readonly [K in keyof ScheduledTaskUpdateInput]?: ScheduledTaskUpdateInput[K] } =
+    {};
+  const title = draft.title.trim();
+  const prompt = draft.prompt.trim();
+  if (title !== baseline.title.trim()) patch.title = title;
+  if (prompt !== baseline.prompt.trim()) patch.prompt = prompt;
+  if (draft.enabled !== baseline.enabled) patch.enabled = draft.enabled;
+  if (draft.runtimeMode !== baseline.runtimeMode) patch.runtimeMode = draft.runtimeMode;
+  if (draft.interactionMode !== baseline.interactionMode)
+    patch.interactionMode = draft.interactionMode;
+  if (draft.modelKey !== baseline.modelKey) patch.modelSelection = modelSelection;
+  const schedule = scheduleFromDraft(draft);
+  if (schedule !== null && JSON.stringify(schedule) !== JSON.stringify(scheduleFromDraft(baseline)))
+    patch.schedule = schedule;
+  const workspace = workspaceStrategyFromDraft(draft);
+  const openingWorkspace = workspaceStrategyFromDraft(baseline);
+  if (workspace.type !== openingWorkspace.type) patch.workspaceStrategy = workspace;
+  else if (workspace.type === task.workspaceStrategy.type) {
+    if (workspace.type === "worktree" && openingWorkspace.type === "worktree") {
+      const sparse = {
+        ...(workspace.baseRef !== openingWorkspace.baseRef ? { baseRef: workspace.baseRef } : {}),
+        ...(workspace.startFromOrigin !== openingWorkspace.startFromOrigin
+          ? { startFromOrigin: workspace.startFromOrigin }
+          : {}),
+      };
+      if (Object.keys(sparse).length > 0) patch.workspaceStrategyPatch = sparse;
+    } else if (
+      workspace.type === "existing_worktree" &&
+      openingWorkspace.type === "existing_worktree" &&
+      workspace.worktreePath !== openingWorkspace.worktreePath
+    ) {
+      patch.workspaceStrategyPatch = { worktreePath: workspace.worktreePath };
+    }
+  }
+  if (draft.projectId !== baseline.projectId) {
+    patch.nextProjectId = draft.projectId as ProjectId;
+    // Only a real move detaches; a concurrent move and rebind at the destination survives.
+    if (draft.projectId !== task.projectId && task.threadId !== null) patch.threadId = null;
+  }
+  if (Object.keys(patch).length === 0) return null;
+  return { ...patch, id: task.id, projectId: task.projectId };
 }

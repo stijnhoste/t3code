@@ -6,9 +6,11 @@ import {
   ProviderInstanceId,
   ProjectId,
   ScheduledTaskId,
+  ThreadId,
   type ScheduledTask,
 } from "@t3tools/contracts";
 import {
+  buildScheduledTaskUpdateInput,
   scheduledTaskDefaultModel,
   createDraft,
   editDraft,
@@ -351,4 +353,87 @@ describe("scheduled task model defaults", () => {
       ),
     ).toBeNull();
   });
+});
+
+describe("scheduled task partial edits", () => {
+  it("a stale rename preserves the live prompt, pause, project and binding", () => {
+    const opened = editDraft(legacyTask);
+    const live: ScheduledTask = {
+      ...legacyTask,
+      prompt: "Changed elsewhere",
+      enabled: false,
+      projectId: ProjectId.make("moved"),
+      threadId: ThreadId.make("rebound"),
+    };
+    expect(buildScheduledTaskUpdateInput(opened, live)).toBeNull();
+    expect(buildScheduledTaskUpdateInput({ ...opened, title: "Renamed" }, live)).toEqual({
+      id: live.id,
+      projectId: live.projectId,
+      title: "Renamed",
+    });
+  });
+
+  it("a base-ref edit sends no untouched workspace controls or hidden branch", () => {
+    const task: ScheduledTask = {
+      ...legacyTask,
+      workspaceStrategy: {
+        type: "worktree",
+        baseRef: "main",
+        startFromOrigin: true,
+        branch: "keep",
+      },
+    };
+    const opened = editDraft(task);
+    const live: ScheduledTask = {
+      ...task,
+      workspaceStrategy: {
+        type: "worktree",
+        baseRef: "main",
+        startFromOrigin: false,
+        branch: "new-branch",
+      },
+    };
+    const edited = { ...opened, baseRef: "develop" };
+    expect(buildScheduledTaskUpdateInput(edited, live)).toEqual({
+      id: live.id,
+      projectId: live.projectId,
+      workspaceStrategyPatch: { baseRef: "develop" },
+    });
+    expect(
+      buildScheduledTaskUpdateInput(edited, { ...live, workspaceStrategy: { type: "root" } }),
+    ).toBeNull();
+  });
+
+  it("a project move detaches only a binding outside the destination", () => {
+    const task: ScheduledTask = { ...legacyTask, threadId: ThreadId.make("bound") };
+    const opened = editDraft(task);
+    const destination = ProjectId.make("destination");
+    const edited = { ...opened, projectId: destination };
+    expect(buildScheduledTaskUpdateInput(edited, task)).toEqual({
+      id: task.id,
+      projectId: task.projectId,
+      nextProjectId: destination,
+      threadId: null,
+    });
+    const rebound: ScheduledTask = {
+      ...task,
+      projectId: destination,
+      threadId: ThreadId.make("new-binding"),
+    };
+    expect(buildScheduledTaskUpdateInput(edited, rebound)).toEqual({
+      id: task.id,
+      projectId: destination,
+      nextProjectId: destination,
+    });
+  });
+});
+
+it("a mobile runtime-mode edit is included without reverting concurrent fields", () => {
+  const opened = editDraft(legacyTask);
+  expect(
+    buildScheduledTaskUpdateInput(
+      { ...opened, runtimeMode: "auto" },
+      { ...legacyTask, title: "Changed elsewhere", enabled: false },
+    ),
+  ).toEqual({ id: legacyTask.id, projectId: legacyTask.projectId, runtimeMode: "auto" });
 });

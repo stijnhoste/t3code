@@ -3,6 +3,7 @@ import { useAtomValue } from "@effect/atom-react";
 import {
   AuthOrchestrationOperateScope,
   resolveProjectProviderInstanceEnabled,
+  scheduledTaskLegacyUpsert,
 } from "@t3tools/contracts";
 import { readEnvironmentScope } from "../../state/session";
 import type {
@@ -66,6 +67,7 @@ import { SettingsSection } from "./components/SettingsSection";
 import { useSettingsEnvironmentFilter, type SettingsTarget } from "./settings-environment-filter";
 import {
   editDraft,
+  buildScheduledTaskUpdateInput,
   scheduledTaskDefaultModel,
   scheduleFromDraft,
   type ScheduledTaskDraft as Draft,
@@ -576,11 +578,19 @@ function TaskForm({
   const projects = useProjects().filter((project) => project.environmentId === environmentId);
   const config = useEnvironmentServerConfig(environmentId);
   const modelOptions = buildModelOptions(config, null, undefined, draft.projectId);
+  const supportsUpdate = config?.environment.capabilities.scheduledTaskUpdate === true;
   const canOperate = useAtomValue(
-    serverEnvironment.upsertScheduledTask.permissionAtom(environmentId),
+    (draft.task !== null && supportsUpdate
+      ? serverEnvironment.updateScheduledTask
+      : serverEnvironment.upsertScheduledTask
+    ).permissionAtom(environmentId),
   );
   const upsert = useAtomCommand(serverEnvironment.upsertScheduledTask, {
     label: "scheduled task upsert",
+    reportFailure: false,
+  });
+  const update = useAtomCommand(serverEnvironment.updateScheduledTask, {
+    label: "scheduled task update",
     reportFailure: false,
   });
   const submissionPending = useRef(false);
@@ -606,6 +616,7 @@ function TaskForm({
       saving ||
       dictationPending ||
       taskMissing ||
+      (draft.task !== null && tasks.data === null) ||
       environmentUnavailable
     )
       return;
@@ -645,34 +656,46 @@ function TaskForm({
       Dialog.alert("Project unavailable", "Choose a project in this environment.");
       return;
     }
-    const input: ScheduledTaskUpsertInput = {
-      ...(draft.task ? { id: draft.task.id, requireExisting: true } : {}),
-      title: draft.title.trim(),
-      prompt: draft.prompt.trim(),
-      projectId: draft.projectId,
-      modelSelection: draft.modelSelection,
-      schedule,
-      enabled: draft.enabled,
-      threadId: draft.task?.threadId ?? null,
-      workspaceStrategy:
-        draft.workspace === "root"
-          ? { type: "root" }
-          : draft.workspace === "existing_worktree"
-            ? { type: "existing_worktree", worktreePath: draft.checkoutPath.trim() }
-            : {
-                type: "worktree",
-                baseRef: draft.baseRef.trim() || "main",
-                startFromOrigin: draft.startFromOrigin,
-              },
-      runtimeMode: draft.runtimeMode,
-      interactionMode: draft.task?.interactionMode ?? "default",
-      creationSource: draft.task?.creationSource ?? "mobile",
-    };
+    // Existing tasks need the live row to scope the edit and preserve concurrent changes.
+    if (draft.task !== null && liveTask === undefined) return;
     submissionPending.current = true;
     setSaving(true);
-    const result = await upsert({ environmentId, input });
+    let result;
+    if (draft.task !== null && liveTask !== undefined) {
+      const patch = buildScheduledTaskUpdateInput(draft, liveTask);
+      result =
+        patch === null
+          ? null
+          : supportsUpdate
+            ? await update({ environmentId, input: patch })
+            : await upsert({ environmentId, input: scheduledTaskLegacyUpsert(liveTask, patch) });
+    } else {
+      const input: ScheduledTaskUpsertInput = {
+        title: draft.title.trim(),
+        prompt: draft.prompt.trim(),
+        projectId: draft.projectId,
+        modelSelection: draft.modelSelection,
+        schedule,
+        enabled: draft.enabled,
+        threadId: null,
+        workspaceStrategy:
+          draft.workspace === "root"
+            ? { type: "root" }
+            : draft.workspace === "existing_worktree"
+              ? { type: "existing_worktree", worktreePath: draft.checkoutPath.trim() }
+              : {
+                  type: "worktree",
+                  baseRef: draft.baseRef.trim() || "main",
+                  startFromOrigin: draft.startFromOrigin,
+                },
+        runtimeMode: draft.runtimeMode,
+        interactionMode: "default",
+        creationSource: "mobile",
+      };
+      result = await upsert({ environmentId, input });
+    }
     setSaving(false);
-    if (result._tag === "Failure") {
+    if (result !== null && result._tag === "Failure") {
       submissionPending.current = false;
       failure("Could not save task", result);
       return;
@@ -1009,7 +1032,13 @@ function TaskForm({
         tone="primary"
         fullWidth
         loading={saving}
-        disabled={!canOperate || dictationPending || taskMissing || environmentUnavailable}
+        disabled={
+          !canOperate ||
+          dictationPending ||
+          taskMissing ||
+          (draft.task !== null && tasks.data === null) ||
+          environmentUnavailable
+        }
         onPress={() => void save()}
         label={saving ? "Saving…" : draft.task ? "Save changes" : "Create task"}
       />

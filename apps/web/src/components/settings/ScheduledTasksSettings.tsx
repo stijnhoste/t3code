@@ -16,7 +16,6 @@ import { type ReactNode, useEffect, useRef, useState } from "react";
 import type {
   EnvironmentId,
   ModelSelection,
-  OrchestrationV2ThreadLaunchWorkspaceStrategy,
   ProjectId,
   ScheduledTask,
   ScheduledTaskId,
@@ -32,6 +31,7 @@ import {
   MIN_SCHEDULED_TASK_INTERVAL_MS,
   ProviderInstanceId,
   resolveEnvironmentMachineKind,
+  scheduledTaskLegacyUpsert,
 } from "@t3tools/contracts";
 import {
   isAtomCommandInterrupted,
@@ -73,6 +73,8 @@ import { SettingsGroup } from "./SettingsGroup";
 import { settingsScopeEnvironmentLabel, settingsScopeEnvironmentLabels } from "./settingsScopeAxis";
 import {
   WEBHOOK_SIGNATURE_DEFAULTS,
+  buildScheduledTaskUpdateInput,
+  workspaceStrategyFromDraft,
   matchesScheduledTaskScope,
   scheduleFromDraft,
   scheduledTaskDefaultModel,
@@ -984,15 +986,24 @@ function ScheduledTaskEditorForm({
   const settings = useEnvironmentSettings(environmentId);
   const providers =
     useAtomValue(serverEnvironment.providersValueAtom(environmentId)) ?? EMPTY_SERVER_PROVIDERS;
+  const supportsUpdate =
+    environment?.serverConfig?.environment.capabilities.scheduledTaskUpdate === true;
   const canOperate = useAtomValue(
-    serverEnvironment.upsertScheduledTask.permissionAtom(environmentId),
+    (task !== null && supportsUpdate
+      ? serverEnvironment.updateScheduledTask
+      : serverEnvironment.upsertScheduledTask
+    ).permissionAtom(environmentId),
   );
   const upsertTask = useAtomCommand(serverEnvironment.upsertScheduledTask, {
     label: "scheduled task upsert",
   });
+  const updateTask = useAtomCommand(serverEnvironment.updateScheduledTask, {
+    label: "scheduled task update",
+  });
   const [draft, setDraft] = useState<DraftState>(() =>
     task ? taskToDraft(task) : { ...EMPTY_DRAFT, projectId: projects[0]?.id ?? "" },
   );
+  const [baselineDraft] = useState(draft);
   const submissionPending = useRef(false);
   const editingTaskMissing =
     draft.editingId !== null &&
@@ -1093,36 +1104,50 @@ function ScheduledTaskEditorForm({
       draft.baseModelSelection.model === selection.model
         ? draft.baseModelSelection
         : selection;
-    const workspaceStrategy: OrchestrationV2ThreadLaunchWorkspaceStrategy =
-      draft.workspaceMode === "root"
-        ? { type: "root" }
-        : draft.workspaceMode === "existing_worktree"
-          ? { type: "existing_worktree", worktreePath: draft.existingWorktreePath.trim() }
-          : {
-              type: "worktree",
-              baseRef: draft.baseRef.trim() || "main",
-              startFromOrigin: draft.startFromOrigin,
-            };
-    const input: ScheduledTaskUpsertInput = {
-      ...(draft.editingId ? { id: draft.editingId as ScheduledTaskId, requireExisting: true } : {}),
-      title: draft.title.trim(),
-      prompt: draft.prompt.trim(),
-      enabled: draft.enabled,
-      schedule,
-      projectId: selectedProjectId as ProjectId,
-      threadId: draft.threadId ? (draft.threadId as ThreadId) : null,
-      workspaceStrategy,
-      modelSelection,
-      runtimeMode: draft.runtimeMode,
-      interactionMode: draft.interactionMode,
-      creationSource: "web",
-    };
-    // Lock before React renders, and keep successful creates locked until the form closes.
+    const workspaceStrategy = workspaceStrategyFromDraft(draft);
     submissionPending.current = true;
     setSaving(true);
-    const result = await upsertTask({ environmentId, input });
+    let result;
+    if (draft.editingId !== null) {
+      const editingTask = tasksQuery.data.tasks.find((entry) => entry.id === draft.editingId);
+      if (editingTask === undefined) {
+        submissionPending.current = false;
+        setSaving(false);
+        return;
+      }
+      const patch = buildScheduledTaskUpdateInput(
+        draft,
+        baselineDraft,
+        editingTask,
+        modelSelection,
+      );
+      result =
+        patch === null
+          ? null
+          : supportsUpdate
+            ? await updateTask({ environmentId, input: patch })
+            : await upsertTask({
+                environmentId,
+                input: scheduledTaskLegacyUpsert(editingTask, patch),
+              });
+    } else {
+      const input: ScheduledTaskUpsertInput = {
+        title: draft.title.trim(),
+        prompt: draft.prompt.trim(),
+        enabled: draft.enabled,
+        schedule,
+        projectId: selectedProjectId as ProjectId,
+        threadId: draft.threadId ? (draft.threadId as ThreadId) : null,
+        workspaceStrategy,
+        modelSelection,
+        runtimeMode: draft.runtimeMode,
+        interactionMode: draft.interactionMode,
+        creationSource: "web",
+      };
+      result = await upsertTask({ environmentId, input });
+    }
     setSaving(false);
-    if (result._tag === "Failure") {
+    if (result !== null && result._tag === "Failure") {
       submissionPending.current = false;
       if (!isAtomCommandInterrupted(result)) {
         reportFailure("Could not save scheduled task", squashAtomCommandFailure(result));

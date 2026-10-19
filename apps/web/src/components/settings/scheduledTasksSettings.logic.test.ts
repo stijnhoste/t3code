@@ -1,10 +1,12 @@
 import {
+  scheduledTaskLegacyUpsert,
   EnvironmentId,
   ProjectId,
   DEFAULT_SERVER_SETTINGS,
   type ServerConfig,
   ProviderInstanceId,
   ScheduledTaskId,
+  ThreadId,
   type ScheduledTask,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
@@ -17,6 +19,7 @@ import { resolveSettingsScope, type SettingsScopeSearch } from "./settingsScope"
 
 import { deriveProviderInstanceEntries } from "../../providerInstances";
 import {
+  buildScheduledTaskUpdateInput,
   scheduledTaskDefaultModel,
   matchesScheduledTaskScope,
   scheduleFromDraft,
@@ -312,5 +315,99 @@ describe("scheduled task model defaults", () => {
         null,
       ),
     ).toBeNull();
+  });
+});
+
+// Keep the opening baseline separate from the live row, as the mounted editor does.
+const buildEdit = (
+  draft: ReturnType<typeof taskToDraft>,
+  baseline: ReturnType<typeof taskToDraft>,
+  live: ScheduledTask,
+) => buildScheduledTaskUpdateInput(draft, baseline, live, legacyTask.modelSelection);
+
+describe("scheduled task partial edits", () => {
+  it("a stale rename preserves the live prompt, pause, project and binding", () => {
+    const opened = taskToDraft(legacyTask);
+    const live: ScheduledTask = {
+      ...legacyTask,
+      prompt: "Changed elsewhere",
+      enabled: false,
+      projectId: ProjectId.make("moved"),
+      threadId: ThreadId.make("rebound"),
+    };
+    expect(buildEdit(opened, opened, live)).toBeNull();
+    expect(buildEdit({ ...opened, title: "Renamed" }, opened, live)).toEqual({
+      id: live.id,
+      projectId: live.projectId,
+      title: "Renamed",
+    });
+    const patch = buildEdit({ ...opened, title: "Renamed" }, opened, live)!;
+    expect(scheduledTaskLegacyUpsert(live, patch)).toEqual({
+      id: live.id,
+      requireExisting: true,
+      title: "Renamed",
+      prompt: live.prompt,
+      enabled: live.enabled,
+      schedule: live.schedule,
+      projectId: live.projectId,
+      threadId: live.threadId,
+      workspaceStrategy: live.workspaceStrategy,
+      modelSelection: live.modelSelection,
+      runtimeMode: live.runtimeMode,
+      interactionMode: live.interactionMode,
+      creationSource: live.creationSource,
+    });
+  });
+
+  it("a base-ref edit sends no untouched workspace controls or hidden branch", () => {
+    const task: ScheduledTask = {
+      ...legacyTask,
+      workspaceStrategy: {
+        type: "worktree",
+        baseRef: "main",
+        startFromOrigin: true,
+        branch: "keep",
+      },
+    };
+    const opened = taskToDraft(task);
+    const live: ScheduledTask = {
+      ...task,
+      workspaceStrategy: {
+        type: "worktree",
+        baseRef: "main",
+        startFromOrigin: false,
+        branch: "new-branch",
+      },
+    };
+    const edited = { ...opened, baseRef: "develop" };
+    expect(buildEdit(edited, opened, live)).toEqual({
+      id: live.id,
+      projectId: live.projectId,
+      workspaceStrategyPatch: { baseRef: "develop" },
+    });
+    expect(buildEdit(edited, opened, { ...live, workspaceStrategy: { type: "root" } })).toBeNull();
+  });
+
+  it("a project move detaches only a binding outside the destination", () => {
+    const task: ScheduledTask = { ...legacyTask, threadId: ThreadId.make("bound") };
+    const opened = taskToDraft(task);
+    const destination = ProjectId.make("destination");
+    const edited = { ...opened, projectId: destination };
+    expect(buildEdit(edited, opened, task)).toEqual({
+      id: task.id,
+      projectId: task.projectId,
+      nextProjectId: destination,
+      threadId: null,
+    });
+    const rebound: ScheduledTask = {
+      ...task,
+      projectId: destination,
+      threadId: ThreadId.make("new-binding"),
+    };
+    expect(buildEdit(edited, opened, rebound)).toEqual({
+      id: task.id,
+      projectId: destination,
+      nextProjectId: destination,
+    });
   });
 });

@@ -248,6 +248,36 @@ export const ScheduledTaskUpdateInput = Schema.Struct({
 });
 export type ScheduledTaskUpdateInput = typeof ScheduledTaskUpdateInput.Type;
 
+const decodeLegacyWorkspaceStrategy = Schema.decodeUnknownSync(
+  OrchestrationV2ThreadLaunchWorkspaceStrategy,
+);
+
+export function scheduledTaskLegacyUpsert(
+  task: ScheduledTask,
+  patch: ScheduledTaskUpdateInput,
+): ScheduledTaskUpsertInput {
+  return {
+    id: task.id,
+    requireExisting: true,
+    title: patch.title ?? task.title,
+    prompt: patch.prompt ?? task.prompt,
+    enabled: patch.enabled ?? task.enabled,
+    schedule: patch.schedule ?? task.schedule,
+    projectId: patch.nextProjectId ?? task.projectId,
+    threadId: patch.threadId === undefined ? task.threadId : patch.threadId,
+    workspaceStrategy:
+      patch.workspaceStrategy ??
+      decodeLegacyWorkspaceStrategy({
+        ...task.workspaceStrategy,
+        ...patch.workspaceStrategyPatch,
+      }),
+    modelSelection: patch.modelSelection ?? task.modelSelection,
+    runtimeMode: patch.runtimeMode ?? task.runtimeMode,
+    interactionMode: patch.interactionMode ?? task.interactionMode,
+    creationSource: task.creationSource,
+  };
+}
+
 export const ScheduledTaskSetEnabledInput = Schema.Struct({
   id: ScheduledTaskId,
   enabled: Schema.Boolean,
