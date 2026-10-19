@@ -2,7 +2,8 @@ import { expect, it } from "vite-plus/test";
 import { unified } from "unified";
 import remarkParse from "remark-parse";
 import remarkRehype from "remark-rehype";
-import { CHAT_MARKDOWN_REHYPE_PLUGINS, CHAT_MARKDOWN_REMARK_PLUGINS } from "./markdownPipeline.ts";
+import { CHAT_MARKDOWN_REMARK_PLUGINS } from "./markdownPipeline.ts";
+import { CHAT_MARKDOWN_REHYPE_PLUGINS } from "./markdownRawPipeline.ts";
 
 it("preserves in-app thread links through the shared Markdown sanitizer", () => {
   const processor = unified()

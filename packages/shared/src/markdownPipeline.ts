@@ -1,7 +1,6 @@
 import type { Processor } from "unified";
 import { isWindowsAbsolutePath } from "./path.ts";
-import type { PluggableList } from "unified";
-import rehypeRaw from "rehype-raw";
+import type { Pluggable, PluggableList } from "unified";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
@@ -177,12 +176,14 @@ export const CHAT_MARKDOWN_REMARK_PLUGINS_WITH_BREAKS: PluggableList = [
   remarkNormalizeLinksAndTagInlineCode,
 ];
 
-export const CHAT_MARKDOWN_REHYPE_PLUGINS: PluggableList = [
-  rehypePreserveBareAnchorPlaceholders,
-  rehypeRaw,
-  rehypePreserveImageSourceMeta,
-  [rehypeSanitize, CHAT_MARKDOWN_SANITIZE_SCHEMA],
-];
+export function chatMarkdownRehypePlugins(rawHtml: Pluggable | null): PluggableList {
+  return [
+    rehypePreserveBareAnchorPlaceholders,
+    ...(rawHtml === null ? [] : [rawHtml]),
+    rehypePreserveImageSourceMeta,
+    [rehypeSanitize, CHAT_MARKDOWN_SANITIZE_SCHEMA],
+  ];
+}
 
 type MarkdownAstNode = {
   type?: string;

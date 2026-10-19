@@ -451,6 +451,14 @@
       "types": "./src/proposedPlanText.ts",
       "import": "./src/proposedPlanText.ts"
     },
+    "./markdownRawPipeline": {
+      "types": "./src/markdownRawPipeline.ts",
+      "import": "./src/markdownRawPipeline.ts"
+    },
+    "./threadFindBlockTags": {
+      "types": "./src/threadFindBlockTags.ts",
+      "import": "./src/threadFindBlockTags.ts"
+    },
     "./markdownPipeline": {
       "types": "./src/markdownPipeline.ts",
       "import": "./src/markdownPipeline.ts"

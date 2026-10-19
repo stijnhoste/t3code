@@ -9,7 +9,7 @@ import type {
   ThreadPullRequestLink,
 } from "@t3tools/contracts";
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
-import { lazy, Suspense } from "react";
+import { type ComponentProps, lazy, Suspense } from "react";
 import type { ComposerImageAttachment, DraftId } from "../../composerDraftStore";
 import type { ShortcutMatchContext } from "../../keybindings";
 import { type RightPanelSurface, useRightPanelStore } from "../../rightPanelStore";
@@ -18,11 +18,34 @@ import {
   type PersistentThreadTerminalPanelProps,
 } from "../PersistentThreadTerminals";
 import { pullRequestPanelContext } from "../pullRequest/pullRequestDetail.logic";
-import { PullRequestDetailPanel } from "../pullRequest/PullRequestDetailPanel";
 import { PullRequestDetailGhost } from "../pullRequest/PullRequestGhosts";
 import { PullRequestsUnavailableState } from "../pullRequest/PullRequestsUnavailableState";
-import { ThreadPullRequestsPanel } from "../pullRequest/ThreadPullRequestsPanel";
 
+import { RenderErrorBoundary } from "../RenderErrorBoundary";
+
+function PullRequestPanelLoadError() {
+  return <p role="alert">Pull requests could not load. Reload the app to try again.</p>;
+}
+
+const LazyPullRequestDetailPanel = lazy(() =>
+  import("../pullRequest/PullRequestDetailPanel").then((module) => ({
+    default: module.PullRequestDetailPanel,
+  })),
+);
+function PullRequestDetailPanel(props: ComponentProps<typeof LazyPullRequestDetailPanel>) {
+  return (
+    <RenderErrorBoundary fallback={<PullRequestPanelLoadError />}>
+      <Suspense fallback={<PullRequestDetailGhost />}>
+        <LazyPullRequestDetailPanel {...props} />
+      </Suspense>
+    </RenderErrorBoundary>
+  );
+}
+const ThreadPullRequestsPanel = lazy(() =>
+  import("../pullRequest/ThreadPullRequestsPanel").then((module) => ({
+    default: module.ThreadPullRequestsPanel,
+  })),
+);
 const PreviewPanel = lazy(() =>
   import("../preview/PreviewPanel").then((module) => ({ default: module.PreviewPanel })),
 );
@@ -161,7 +184,13 @@ export function RightPanelSurfaceContent(props: {
       );
     }
     case "pull-requests":
-      return <ThreadPullRequestsPanel threadRef={threadRef} />;
+      return (
+        <RenderErrorBoundary fallback={<PullRequestPanelLoadError />}>
+          <Suspense fallback={null}>
+            <ThreadPullRequestsPanel threadRef={threadRef} />
+          </Suspense>
+        </RenderErrorBoundary>
+      );
     case "device":
       return (
         <Suspense fallback={null}>

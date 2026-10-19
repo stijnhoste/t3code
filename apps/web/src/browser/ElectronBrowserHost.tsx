@@ -7,7 +7,7 @@ import {
   FILL_PREVIEW_VIEWPORT,
 } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
-import { type ComponentProps, useEffect, useEffectEvent, useState } from "react";
+import { type ComponentProps, lazy, Suspense, useEffect, useEffectEvent, useState } from "react";
 
 import { primaryEnvironmentIdAtom } from "~/state/primaryEnvironment";
 
@@ -18,10 +18,10 @@ import { previewEnvironment } from "~/state/preview";
 import { useEnvironmentScope } from "~/state/session";
 import { useAtomCommand } from "~/state/use-atom-command";
 
+import { RenderErrorBoundary } from "~/components/RenderErrorBoundary";
 import { readPreviewAnnotationTheme } from "./annotationTheme";
 import { useBrowserDefaults } from "./browserDefaults";
 import { useBrowserPointerStore } from "./browserPointerStore";
-import { HostedBrowserWebview } from "./HostedBrowserWebview";
 import { openUrlInPreview } from "./openFileInPreview";
 import { rendersServerTabNatively } from "./previewRuntime";
 import { previewRuntimeTabId } from "./previewRuntimeTabId";
@@ -145,13 +145,26 @@ export function ElectronBrowserHost() {
   );
 }
 
+// Only Electron with an open preview mounts a webview; the web build never loads it.
+const HostedBrowserWebview = lazy(() =>
+  import("./HostedBrowserWebview").then((module) => ({ default: module.HostedBrowserWebview })),
+);
+
 function AuthorizedBrowserWebview(props: ComponentProps<typeof HostedBrowserWebview>) {
   const canOperatePreview = useEnvironmentScope(
     props.threadRef.environmentId,
     AuthPreviewOperateScope,
   );
   const profileId = useTabProfileId(props.profileId);
-  return canOperatePreview ? <HostedBrowserWebview {...props} profileId={profileId} /> : null;
+  return canOperatePreview ? (
+    <RenderErrorBoundary
+      fallback={<p role="alert">The browser could not load. Reload the app to try again.</p>}
+    >
+      <Suspense fallback={null}>
+        <HostedBrowserWebview {...props} profileId={profileId} />
+      </Suspense>
+    </RenderErrorBoundary>
+  ) : null;
 }
 
 /**
