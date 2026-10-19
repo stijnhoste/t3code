@@ -777,6 +777,11 @@ export const layer = Layer.effect(
                   DateTime.toEpochMillis(parsedNextRunAt.value) > DateTime.toEpochMillis(startedAt))
               )
                 return { task: active, running: false };
+              if (trigger === "manual" && active.schedule.type === "webhook") {
+                return yield* taskError("Webhook tasks run when their URL receives a request.", {
+                  taskId: active.id,
+                });
+              }
               if (webhook !== undefined) {
                 const reason =
                   active.createdAt !== task.createdAt
@@ -789,6 +794,7 @@ export const layer = Layer.effect(
                 if (reason !== null) return yield* new WebhookDeliverySkipped({ reason });
               }
               yield* markRunning(active.id, startedAtIso);
+              reservedAt = startedAtIso;
               return { task: active, running: true };
             }),
           )
@@ -809,7 +815,6 @@ export const layer = Layer.effect(
         }
         if (!reservedTask.running) return reservedTask.task;
         const active = reservedTask.task;
-        reservedAt = startedAtIso;
         yield* notifyChanged;
 
         const fireKey =
