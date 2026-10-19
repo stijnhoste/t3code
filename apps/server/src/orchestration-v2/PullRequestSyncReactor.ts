@@ -433,6 +433,26 @@ export const make = Effect.gen(function* () {
         switch (event.type) {
           case "thread.pull-request-link-updated":
             return event.payload.snapshot === null ? requestSync(event.payload) : Effect.void;
+          case "thread.pull-request-link-synced":
+            return projections.getThreadsWithPullRequests(event.threadId).pipe(
+              Effect.flatMap((threads) =>
+                Effect.forEach(
+                  threads,
+                  (thread) =>
+                    Effect.forEach(
+                      visibleThreadPullRequests(thread.pullRequests ?? []).filter(
+                        (link) => link.snapshot === null,
+                      ),
+                      requestSync,
+                      { discard: true },
+                    ),
+                  { discard: true },
+                ),
+              ),
+              Effect.catchCause(
+                logSkipped("pull request sibling sync skipped", { threadId: event.threadId }),
+              ),
+            );
           case "thread.pull-request-synced":
             return Effect.forEach(
               visibleThreadPullRequests(event.payload.pullRequests ?? []).filter(

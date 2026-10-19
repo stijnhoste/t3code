@@ -13,7 +13,10 @@ import {
   threadErrorSummary,
   usageLimitRunPresentedAsLatest,
 } from "@t3tools/shared/orchestrationV2ThreadError";
-import { threadPullRequestsOf } from "@t3tools/shared/threadPullRequests";
+import {
+  applyThreadPullRequestLinkSync,
+  threadPullRequestsOf,
+} from "@t3tools/shared/threadPullRequests";
 import type {
   OrchestrationV2AppThread,
   OrchestrationV2CheckpointScope,
@@ -758,11 +761,22 @@ export function applyToProjection(
         ...base,
         thread: event.payload,
       };
+    // A host refresh is not activity, matching the stored projection.
+    case "thread.pull-request-link-synced":
+      return {
+        ...projection,
+        thread: applyThreadPullRequestLinkSync(projection.thread, event.payload),
+      };
     case "thread.visited":
     case "thread.marked-unread":
       return {
         ...projection,
         thread: event.payload,
+      };
+    case "thread.visit-recorded":
+      return {
+        ...projection,
+        thread: { ...projection.thread, lastVisitedAt: event.payload.lastVisitedAt },
       };
     case "run.created":
     case "run.updated":
@@ -1930,6 +1944,28 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             `;
             break;
           }
+          case "thread.visit-recorded": {
+            const visitedAt = event.payload.lastVisitedAt;
+            yield* sql`
+              UPDATE orchestration_v2_projection_threads
+              SET payload_json = json_set(payload_json, '$.lastVisitedAt',
+                ${visitedAt === null ? null : DateTime.formatIso(visitedAt)})
+              WHERE thread_id = ${event.threadId}
+            `;
+            break;
+          }
+          case "thread.pull-request-link-synced": {
+            const thread = yield* getThread(event.threadId);
+            const updated = applyThreadPullRequestLinkSync(thread, event.payload);
+            if (updated === thread) break;
+            const payloadJson = yield* encodeThreadPayload(updated);
+            yield* sql`
+              UPDATE orchestration_v2_projection_threads
+              SET payload_json = ${payloadJson}
+              WHERE thread_id = ${event.threadId}
+            `;
+            break;
+          }
           case "run.created":
           case "run.updated": {
             const payloadJson = yield* encodeRunPayload(event.payload);
@@ -2704,6 +2740,9 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           event.type !== "thread.unpinned" &&
           event.type !== "thread.pin-reordered" &&
           event.type !== "thread.visited" &&
+          event.type !== "thread.visit-recorded" &&
+          event.type !== "thread.pull-request-link-synced" &&
+          event.type !== "thread.pull-request-synced" &&
           event.type !== "thread.marked-unread" &&
           event.type !== "thread.metadata-updated" &&
           event.type !== "thread.runtime-mode-updated" &&

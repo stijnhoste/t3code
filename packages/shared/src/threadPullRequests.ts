@@ -366,6 +366,36 @@ export function threadPullRequestsOf(thread: {
       ];
 }
 
+export function applyThreadPullRequestLinkSync(
+  thread: OrchestrationV2AppThread,
+  sync: ThreadPullRequestKey & Pick<ThreadPullRequestLink, "snapshot" | "stack">,
+): OrchestrationV2AppThread {
+  const links = threadPullRequestsOf(thread);
+  const existing = links.find((link) => threadPullRequestKeysEqual(link, sync));
+  if (existing === undefined) return thread;
+  const pullRequests = links.map((link) =>
+    link === existing ? { ...link, snapshot: sync.snapshot, stack: sync.stack } : link,
+  );
+  const linked = thread.linkedPullRequest;
+  return {
+    ...thread,
+    pullRequests,
+    ...(linked === undefined
+      ? {}
+      : {
+          linkedPullRequest:
+            linked &&
+            pullRequests.some(
+              (link) =>
+                link.source !== "stack-dismissed" &&
+                threadPullRequestKeysEqual(link, legacyThreadPullRequestKey(linked)),
+            )
+              ? linked
+              : null,
+        }),
+  };
+}
+
 export function applyThreadPullRequestLinkUpdate(
   thread: OrchestrationV2AppThread,
   updated: ThreadPullRequestLink,

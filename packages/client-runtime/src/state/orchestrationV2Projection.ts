@@ -1,4 +1,7 @@
-import { applyThreadPullRequestLinkUpdate } from "@t3tools/shared/threadPullRequests";
+import {
+  applyThreadPullRequestLinkSync,
+  applyThreadPullRequestLinkUpdate,
+} from "@t3tools/shared/threadPullRequests";
 import type {
   OrchestrationV2DomainEvent,
   OrchestrationV2Run,
@@ -225,6 +228,16 @@ export function applyOrchestrationV2ProjectionEvent(
     case "thread.model-selection-updated":
     case "thread.provider-switched":
       return { ...base, thread: event.payload };
+    case "thread.pull-request-link-synced":
+      return {
+        ...projection,
+        thread: applyThreadPullRequestLinkSync(projection.thread, event.payload),
+      };
+    case "thread.visit-recorded":
+      return {
+        ...projection,
+        thread: { ...projection.thread, lastVisitedAt: event.payload.lastVisitedAt },
+      };
     // Visited tracking is read state, not activity: skip the updatedAt bump.
     case "thread.visited":
     case "thread.marked-unread":

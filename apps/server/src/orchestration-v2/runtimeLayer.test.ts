@@ -5387,6 +5387,7 @@ it.layer(Layer.fresh(layerSharedApplicationDataPlaneTest))("compact PR events", 
         });
       }
       const before = yield* orchestrator.getThreadShell(threadId);
+      yield* TestClock.adjust("1 second");
       yield* orchestrator.dispatch({
         type: "thread.pull-request-link.sync",
         commandId: CommandId.make("compact-pr-sync"),
@@ -5415,12 +5416,13 @@ it.layer(Layer.fresh(layerSharedApplicationDataPlaneTest))("compact PR events", 
         SELECT event_type, payload_json FROM orchestration_events
         WHERE command_id = ${"compact-pr-sync"}
       `;
+      const after = yield* orchestrator.getThreadShell(threadId);
+      assert.deepEqual(after?.updatedAt, before?.updatedAt);
       assert.equal(rows.length, 1);
-      assert.equal(rows[0]?.event_type, "thread.pull-request-link-updated");
+      assert.equal(rows[0]?.event_type, "thread.pull-request-link-synced");
       const payload = JSON.parse(rows[0]!.payload_json);
       assert.equal(payload.number, 2);
       assert.isUndefined(payload.pullRequests);
-      const after = yield* orchestrator.getThreadShell(threadId);
       assert.equal(after?.pullRequests?.length, 3);
       assert.deepEqual(after?.pullRequests?.[0], before?.pullRequests?.[0]);
       assert.deepEqual(after?.pullRequests?.[2], before?.pullRequests?.[2]);
@@ -5458,7 +5460,7 @@ it.layer(Layer.fresh(layerSharedApplicationDataPlaneTest))("compact PR events", 
       yield* maintenance.compactEventStore;
       const linkEvents = yield* sql<{ command_id: string }>`
         SELECT command_id FROM orchestration_events
-        WHERE stream_id = ${threadId} AND event_type = 'thread.pull-request-link-updated'
+        WHERE stream_id = ${threadId} AND event_type = 'thread.pull-request-link-synced'
         ORDER BY sequence
       `;
       assert.deepEqual(
@@ -5477,7 +5479,7 @@ it.layer(Layer.fresh(layerSharedApplicationDataPlaneTest))("compact PR events", 
       const threadEvents = () => sql<{ event_type: string }>`
         SELECT event_type FROM orchestration_events
         WHERE stream_id = ${threadId}
-          AND event_type IN ('thread.metadata-updated', 'thread.visited')
+          AND event_type IN ('thread.metadata-updated', 'thread.visit-recorded')
         ORDER BY sequence
       `;
       yield* orchestrator.dispatch({
@@ -5500,8 +5502,17 @@ it.layer(Layer.fresh(layerSharedApplicationDataPlaneTest))("compact PR events", 
       yield* maintenance.compactEventStore;
       assert.deepEqual(
         (yield* threadEvents()).map((row) => row.event_type),
-        ["thread.metadata-updated", "thread.visited"],
+        ["thread.metadata-updated", "thread.visit-recorded"],
       );
+      const [visit] = yield* sql<{ payload_json: string }>`
+        SELECT payload_json FROM orchestration_events
+        WHERE command_id = 'compact-pr-visit-again'`;
+      assert.deepEqual(JSON.parse(visit!.payload_json), {
+        lastVisitedAt: "2026-10-13T15:00:00.000Z",
+      });
+      const visited = yield* orchestrator.getThreadShell(threadId);
+      assert.isTrue((yield* maintenance.rebuild).valid);
+      assert.deepEqual(yield* orchestrator.getThreadShell(threadId), visited);
       yield* orchestrator.dispatch({
         type: "thread.metadata.update",
         commandId: CommandId.make("compact-pr-rename-again"),
@@ -5513,6 +5524,9 @@ it.layer(Layer.fresh(layerSharedApplicationDataPlaneTest))("compact PR events", 
         (yield* threadEvents()).map((row) => row.event_type),
         ["thread.metadata-updated"],
       );
+      const renamed = yield* orchestrator.getThreadShell(threadId);
+      assert.isTrue((yield* maintenance.rebuild).valid);
+      assert.deepEqual(yield* orchestrator.getThreadShell(threadId), renamed);
     }),
   );
 });

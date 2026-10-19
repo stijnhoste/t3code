@@ -5,6 +5,7 @@ import {
   type OrchestrationV2Run,
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2TurnItem,
+  EventId,
   MessageId,
   ProjectId,
   ProviderInstanceId,
@@ -106,6 +107,80 @@ const emptyProjection = {
 } as OrchestrationV2ThreadProjection;
 
 describe("applyOrchestrationV2ProjectionEvent", () => {
+  it("applies compact visits without changing activity or transcript state", () => {
+    const visitedAt = DateTime.add(now, { hours: 1 });
+    const projection = { ...emptyProjection, turnItems: [commandItem("retained")] };
+    const next = applyOrchestrationV2ProjectionEvent(projection, {
+      id: EventId.make("compact-visit"),
+      type: "thread.visit-recorded",
+      threadId,
+      occurredAt: visitedAt,
+      payload: { lastVisitedAt: visitedAt },
+    });
+    expect(next?.thread).toEqual({ ...projection.thread, lastVisitedAt: visitedAt });
+    expect(next?.updatedAt).toEqual(now);
+    expect(next?.turnItems).toBe(projection.turnItems);
+  });
+
+  it("refreshes one PR snapshot without changing link ownership, watches, or activity", () => {
+    const link = (number: number): ThreadPullRequestLink => ({
+      host: "github.com",
+      repository: "pingdotgg/t3code",
+      number,
+      url: `https://github.com/pingdotgg/t3code/pull/${number}`,
+      source: "manual",
+      linkedAt: DateTime.formatIso(now),
+      snapshot: null,
+      stack: null,
+      watch: {
+        startedAt: DateTime.formatIso(now),
+        headSha: "head",
+        failedChecks: ["build"],
+        passed: false,
+        passedChecks: [],
+        remarksThrough: DateTime.formatIso(now),
+        remarkIds: [],
+        conflicting: false,
+        wakes: 0,
+      },
+    });
+    const links = [link(1), link(2)];
+    const projection = {
+      ...emptyProjection,
+      thread: { ...emptyProjection.thread, pullRequests: links },
+      turnItems: [commandItem("retained")],
+    };
+    const snapshot = {
+      state: "merged" as const,
+      title: "Merged upstream",
+      headBranch: "feature",
+      baseBranch: "main",
+      isDraft: false,
+      updatedAt: DateTime.formatIso(now),
+      syncedAt: DateTime.formatIso(now),
+    };
+    const next = applyOrchestrationV2ProjectionEvent(projection, {
+      id: EventId.make("compact-pr-snapshot"),
+      type: "thread.pull-request-link-synced",
+      threadId,
+      occurredAt: DateTime.add(now, { hours: 1 }),
+      payload: {
+        host: links[1]!.host,
+        repository: links[1]!.repository,
+        number: 2,
+        snapshot,
+        stack: null,
+      },
+    });
+    expect(next?.thread).toEqual({
+      ...projection.thread,
+      pullRequests: [links[0], { ...links[1], snapshot }],
+    });
+    expect(next?.thread.pullRequests?.[0]).toBe(links[0]);
+    expect(next?.turnItems).toBe(projection.turnItems);
+    expect(next?.updatedAt).toEqual(now);
+  });
+
   it("applies a compact PR sync without replacing other links or thread metadata", () => {
     const link = (number: number): ThreadPullRequestLink => ({
       host: "github.com",
