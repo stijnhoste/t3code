@@ -1887,10 +1887,10 @@ const CHAT_MARKDOWN_RENDER_REHYPE_PLUGINS = [
 type RehypePlugins = NonNullable<ReactMarkdownOptions["rehypePlugins"]>;
 let rawHtmlPlugins: Promise<RehypePlugins> | undefined;
 function loadRawHtmlPlugins() {
-  // Keep a stable promise for use(), including the sanitized fallback on import failure.
+  // Keep a stable promise for use(), including the escaped fallback on import failure.
   return (rawHtmlPlugins ??= import("@t3tools/shared/markdownRawPipeline").then(
     (module) => [...module.CHAT_MARKDOWN_REHYPE_PLUGINS, rehypeHeadingIds],
-    () => CHAT_MARKDOWN_RENDER_REHYPE_PLUGINS,
+    () => CHAT_MARKDOWN_LITERAL_HTML_REHYPE_PLUGINS,
   ));
 }
 
