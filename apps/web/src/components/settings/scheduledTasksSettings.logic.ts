@@ -1,5 +1,6 @@
 import {
   EnvironmentId,
+  MIN_SCHEDULED_TASK_INTERVAL_MS,
   type ScheduledTaskUpdateInput,
   type OrchestrationV2ThreadLaunchWorkspaceStrategy,
   type ProjectId,
@@ -232,7 +233,13 @@ export function buildScheduledTaskUpdateInput(
     patch.interactionMode = draft.interactionMode;
   if (draft.modelKey !== baseline.modelKey) patch.modelSelection = modelSelection;
   const schedule = scheduleFromDraft(draft);
-  if (schedule !== null && JSON.stringify(schedule) !== JSON.stringify(scheduleFromDraft(baseline)))
+  if (
+    schedule !== null &&
+    (JSON.stringify(schedule) !== JSON.stringify(scheduleFromDraft(baseline)) ||
+      (schedule.type === "interval" &&
+        task.schedule.type === "interval" &&
+        task.schedule.everyMs < MIN_SCHEDULED_TASK_INTERVAL_MS))
+  )
     patch.schedule = schedule;
   const workspace = workspaceStrategyFromDraft(draft);
   const openingWorkspace = workspaceStrategyFromDraft(baseline);

@@ -10,7 +10,7 @@ import type {
   ScheduledTaskWebhookSignature,
 } from "@t3tools/contracts";
 
-import { DEFAULT_SERVER_SETTINGS } from "@t3tools/contracts";
+import { DEFAULT_SERVER_SETTINGS, MIN_SCHEDULED_TASK_INTERVAL_MS } from "@t3tools/contracts";
 import { parseMaxDeliveryAge } from "@t3tools/client-runtime/scheduled-task-webhook";
 import {
   resolveProjectSettings,
@@ -259,7 +259,10 @@ export function buildScheduledTaskUpdateInput(
   const schedule = scheduleFromDraft(draft.schedule);
   if (
     schedule !== null &&
-    JSON.stringify(schedule) !== JSON.stringify(scheduleFromDraft(baseline.schedule))
+    (JSON.stringify(schedule) !== JSON.stringify(scheduleFromDraft(baseline.schedule)) ||
+      (schedule.type === "interval" &&
+        liveTask.schedule.type === "interval" &&
+        liveTask.schedule.everyMs < MIN_SCHEDULED_TASK_INTERVAL_MS))
   ) {
     // Mobile cannot edit signing credentials; preserve the current web/desktop choice.
     patch.schedule =
