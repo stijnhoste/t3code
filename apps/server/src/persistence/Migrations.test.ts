@@ -26,6 +26,45 @@ const v2TableCount = Effect.gen(function* () {
 });
 
 describe("runMigrations", () => {
+  it.effect("indexes active-thread sweep expressions and follows payload changes", () =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`INSERT INTO orchestration_v2_projection_threads (
+        thread_id, project_id, title, default_provider, runtime_mode, interaction_mode,
+        created_at, updated_at, payload_json
+      ) VALUES ('sweep', 'project', 'Sweep', 'codex', 'full-access', 'default',
+        '2026-10-01', '2026-10-01', '{"pullRequests":[{"number":1}]}')`;
+
+      const sweep = sql`SELECT thread_id FROM orchestration_v2_projection_threads
+        WHERE deleted_at IS NULL AND archived_at IS NULL
+          AND json_extract(payload_json, '$.settledOverride') IS NULL
+          AND json_array_length(payload_json, '$.pullRequests') > 0
+        ORDER BY updated_at, thread_id`;
+      assert.deepStrictEqual(yield* sweep, [{ thread_id: "sweep" }]);
+      const bytecode = yield* sql<{ opcode: string; p4: string | null }>`EXPLAIN
+        SELECT thread_id FROM orchestration_v2_projection_threads
+        WHERE deleted_at IS NULL AND archived_at IS NULL
+          AND json_extract(payload_json, '$.settledOverride') IS NULL
+          AND json_array_length(payload_json, '$.pullRequests') > 0
+        ORDER BY updated_at, thread_id`;
+      assert.deepStrictEqual(
+        bytecode.filter((op) => op.opcode === "Function" && op.p4?.startsWith("json_")),
+        [],
+      );
+
+      yield* sql`UPDATE orchestration_v2_projection_threads
+        SET payload_json = json_set(payload_json, '$.settledOverride', 'settled')`;
+      assert.deepStrictEqual(yield* sweep, []);
+      yield* sql`UPDATE orchestration_v2_projection_threads
+        SET payload_json = json_remove(payload_json, '$.settledOverride')`;
+      assert.deepStrictEqual(yield* sweep, [{ thread_id: "sweep" }]);
+      yield* sql`UPDATE orchestration_v2_projection_threads SET archived_at = '2026-10-02'`;
+      assert.deepStrictEqual(yield* sweep, []);
+      assert.deepStrictEqual(yield* runMigrations(), []);
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
+
   it.effect("migrates a fresh database through the whole manifest", () =>
     Effect.gen(function* () {
       yield* runMigrations();
